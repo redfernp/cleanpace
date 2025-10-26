@@ -4,44 +4,43 @@ import pandas as pd
 import re
 from io import StringIO
 
-# ----------------------
+# ======================
 # Page setup
-# ----------------------
+# ======================
 st.set_page_config(page_title="CleanPace", page_icon="🐎", layout="wide")
 st.title("🐎 CleanPace – Run Style & Speed Figure Analyzer")
 
 st.write(
     "Paste or upload your **Run Style Figure** table, and paste your **Horse Speed** blocks. "
-    "You can process each separately, or run both at the same time."
+    "You can process each separately, or run both at the same time. "
+    "Speed Figures now includes a simplified export: **Horse Name + Key Speed Factors Average**."
 )
 
-# ----------------------
+# ======================
 # Helpers
-# ----------------------
+# ======================
 def read_run_style_table(raw: str) -> pd.DataFrame:
     """
     Attempts to parse a 'Run Style Figure' table from raw text.
     Prefers TSV, falls back to CSV. Skips an initial title line if present.
-    Returns a DataFrame with only Horse + Lto1..Lto5 if available.
+    Returns a DataFrame with only Horse + Lto1..Lto5 (if available).
     """
     text = raw.strip()
-    # If the very first line is a title (e.g. 'Run Style Figure'), skip it
     lines = text.splitlines()
-    if lines and lines[0].lower().strip() == "run style figure":
+    if lines and lines[0].strip().lower() == "run style figure":
         text = "\n".join(lines[1:])
 
-    # Try TSV first (header expected on first line now), fallback to CSV
+    # Try TSV first, then CSV
     try:
         df = pd.read_csv(StringIO(text), sep="\t")
     except Exception:
         df = pd.read_csv(StringIO(text))
 
-    # Sometimes the header row is duplicated (if user pasted with headers twice)
-    # Ensure required columns exist
     wanted = ["Horse", "Lto1", "Lto2", "Lto3", "Lto4", "Lto5"]
     present = [c for c in wanted if c in df.columns]
+
     if not present:
-        # Sometimes the first data row is actually the header (e.g., header=1)
+        # Sometimes header might actually be on the second line
         try:
             df = pd.read_csv(StringIO(text), sep="\t", header=1)
         except Exception:
@@ -49,7 +48,6 @@ def read_run_style_table(raw: str) -> pd.DataFrame:
         present = [c for c in wanted if c in df.columns]
 
     subset = df[present].copy()
-    # Coerce Lto1..Lto5 to numeric if present
     for c in ["Lto1", "Lto2", "Lto3", "Lto4", "Lto5"]:
         if c in subset.columns:
             subset[c] = pd.to_numeric(subset[c], errors="coerce")
@@ -158,25 +156,29 @@ def download_button_for_df(label: str, df: pd.DataFrame, filename: str):
     )
 
 
-# ----------------------
+# ======================
 # UI – Tabs
-# ----------------------
+# ======================
 tab1, tab2, tab3 = st.tabs(["Run Style Cleaner", "Speed Figures", "Run Both"])
 
-# Session state to share results across tabs
+# Keep results in session state if you want to reuse later (not required)
 if "run_style_df" not in st.session_state:
     st.session_state.run_style_df = None
 if "speed_df" not in st.session_state:
     st.session_state.speed_df = None
 
-# ----------------------
+# ======================
 # TAB 1: Run Style Cleaner
-# ----------------------
+# ======================
 with tab1:
     st.subheader("Run Style Cleaner")
     col_a, col_b = st.columns(2)
     with col_a:
-        rs_text = st.text_area("Paste your Run Style table (can include 'Run Style Figure' title line):", height=220, key="rs_text")
+        rs_text = st.text_area(
+            "Paste your Run Style table (can include 'Run Style Figure' title line):",
+            height=220,
+            key="rs_text"
+        )
     with col_b:
         rs_file = st.file_uploader("Or upload TSV/CSV/TXT", type=["tsv", "csv", "txt"], key="rs_file")
 
@@ -192,7 +194,7 @@ with tab1:
             try:
                 rs_df = read_run_style_table(raw)
                 if rs_df.empty:
-                    st.warning("Parsed file, but couldn't find the columns: Horse, Lto1..Lto5.")
+                    st.warning("Parsed data, but couldn't find the columns: Horse, Lto1..Lto5.")
                 else:
                     st.success("Run Style parsed successfully.")
                     st.dataframe(rs_df, use_container_width=True)
@@ -201,9 +203,9 @@ with tab1:
             except Exception as e:
                 st.error(f"Failed to parse Run Style data: {e}")
 
-# ----------------------
-# TAB 2: Speed Figures
-# ----------------------
+# ======================
+# TAB 2: Speed Figures (with simplified output)
+# ======================
 with tab2:
     st.subheader("Horse Speed Figures")
     st.caption("Paste the full horse blocks (11 lines per horse, same format as your other app).")
@@ -219,59 +221,52 @@ with tab2:
             try:
                 sp_df = parse_speed_blocks(input_text)
                 st.success("Speed figures parsed successfully.")
+
+                # Full view
+                st.markdown("### Full Results")
                 st.dataframe(sp_df, use_container_width=True)
-                download_button_for_df("💾 Download Speed Figures CSV", sp_df, "cleanpace_speed_figures.csv")
+                download_button_for_df("💾 Download Full Speed Figures CSV", sp_df, "cleanpace_speed_figures.csv")
+
+                # Simplified view: Horse Name + Key Speed Factors Average
+                st.markdown("### 🧩 Simplified View")
+                simple_cols = ["Horse Name", "Key Speed Factors Average"]
+                simple_df = sp_df[simple_cols].copy()
+                st.dataframe(simple_df, use_container_width=True)
+                download_button_for_df(
+                    "💾 Download Simplified CSV (Horse + Key Avg)",
+                    simple_df,
+                    "cleanpace_speed_summary.csv"
+                )
+
                 st.session_state.speed_df = sp_df
             except Exception as e:
                 st.error(f"Failed to parse speed blocks: {e}")
 
-# ----------------------
+# ======================
 # TAB 3: Run Both
-# ----------------------
+# ======================
 with tab3:
     st.subheader("Run Both Analyses")
-    st.caption("Use the inputs from Tabs 1 & 2, then click the button to generate both outputs together.")
-
-    run_both = st.button("🚀 Run Both Now")
-
-    if run_both:
-        # Reuse the current inputs from tabs (if any)
-        # Run Style
-        rs_raw = None
-        if st.session_state.get("rs_file") is not None:
-            try:
-                rs_raw = st.session_state.rs_file.read().decode("utf-8", errors="ignore")
-            except Exception:
-                pass  # Fall back to text
-        if not rs_raw:
-            rs_raw = st.session_state.get("rs_text", "")
-
-        # Speed
-        sp_raw = st.session_state.get("horse_form_cleanpace-horse_form_cleanpace", None)  # not reliable; we will ask user to paste again if needed
-        # Better approach: add fields on this tab for reliability
-        pass
-
-    # A simpler, more reliable combined flow: add two quick inputs here so the user can run both without switching tabs
-    st.markdown("### Quick Inputs (optional)")
+    st.caption("Paste both inputs here and process both at once. You'll get two separate downloads and an optional joined CSV.")
+    st.markdown("### Quick Inputs")
     c1, c2 = st.columns(2)
 
     with c1:
         rs_text_quick = st.text_area(
-            "Run Style table (paste here for combined run)",
+            "Run Style table",
             height=220,
             key="rs_text_quick"
         )
 
     with c2:
         sp_text_quick = st.text_area(
-            "Speed figure blocks (paste here for combined run)",
+            "Speed figure blocks",
             height=220,
             key="sp_text_quick"
         )
 
     if st.button("🚀 Process Both (Using Quick Inputs)"):
         ok = True
-        # Run Style parse
         if not rs_text_quick.strip():
             st.warning("Please paste Run Style table in the left box.")
             ok = False
@@ -284,6 +279,7 @@ with tab3:
                 rs_df2 = read_run_style_table(rs_text_quick)
                 sp_df2 = parse_speed_blocks(sp_text_quick)
 
+                # Show side-by-side results
                 col_left, col_right = st.columns(2)
                 with col_left:
                     st.success("Run Style result")
@@ -293,16 +289,25 @@ with tab3:
                 with col_right:
                     st.success("Speed Figures result")
                     st.dataframe(sp_df2, use_container_width=True)
-                    download_button_for_df("💾 Download Speed Figures CSV", sp_df2, "cleanpace_speed_figures.csv")
+                    download_button_for_df("💾 Download Full Speed Figures CSV", sp_df2, "cleanpace_speed_figures.csv")
+
+                    # Also provide the simplified CSV here
+                    simple_cols = ["Horse Name", "Key Speed Factors Average"]
+                    simple_df2 = sp_df2[simple_cols].copy()
+                    st.markdown("**Simplified Speed Figures (Horse + Key Avg)**")
+                    st.dataframe(simple_df2, use_container_width=True)
+                    download_button_for_df(
+                        "💾 Download Simplified Speed CSV",
+                        simple_df2,
+                        "cleanpace_speed_summary.csv"
+                    )
 
                 # Optional: Joined CSV (match on horse name)
-                st.markdown("### Optional: Joined Output (by horse name)")
-                # Normalize names for merge (strip & casefold)
+                st.markdown("### Optional: Joined Output (by Horse Name)")
                 rs_norm = rs_df2.copy()
                 rs_norm = rs_norm.rename(columns={"Horse": "Horse Name"})
-                for col in ["Horse Name"]:
-                    if col in rs_norm.columns:
-                        rs_norm[col] = rs_norm[col].astype(str).str.strip()
+                if "Horse Name" in rs_norm.columns:
+                    rs_norm["Horse Name"] = rs_norm["Horse Name"].astype(str).str.strip()
 
                 sp_norm = sp_df2.copy()
                 sp_norm["Horse Name"] = sp_norm["Horse Name"].astype(str).str.strip()
@@ -315,4 +320,4 @@ with tab3:
                 st.error(f"Error running both analyses: {e}")
 
 st.markdown("---")
-st.caption("CleanPace v1.2 • Paste-friendly, robust parsing for both Run Style and Speed Figure formats.")
+st.caption("CleanPace v1.3 • Paste-friendly parsing for Run Style & Speed Figures • Includes simplified speed export.")
